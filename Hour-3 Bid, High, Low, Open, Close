@@ -1,0 +1,28 @@
+library(dplyr)
+library(lubridate)
+library(readr)
+
+# Load the CSV file
+data <- read_csv("cTrader.csv")
+
+# Convert the 'Date' column to datetime format and subtract 3 hours
+data$Date <- ymd_hms(data$Date) - hours(3)
+
+# Extract the minute from the 'Date' column for grouping
+data$Minute <- format(data$Date, "%H:%M")
+
+# Group data by each minute
+minute_summary <- data %>%
+  group_by(Minute) %>%
+  summarise(
+    Open = first(Bid),  # First 'Bid' for the minute
+    High = max(Bid), # Maximum 'Bid' in the minute
+    Lowest = min(Bid),   # Minimum 'Bid' in the minute
+    Close = last(Bid)  # Last 'Bid' for the minute
+  )
+
+# Save the summary to a new CSV file in the specified path
+write_csv(minute_summary, "C:/Users/tiyasa/Desktop/B Book/t4b_report/Summary_Bid.csv")
+
+# Show the first few rows of the result to ensure correctness
+print(head(minute_summary))
