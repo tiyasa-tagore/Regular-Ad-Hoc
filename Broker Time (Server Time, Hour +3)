@@ -1,0 +1,44 @@
+import os
+import pandas as pd
+from google.colab import drive
+from datetime import timedelta
+
+# Step 1: Mount Google Drive
+drive.mount('/content/drive', force_remount=True)
+
+# Step 2: Define the folder path where the CSV files are stored
+folder_path = '/content/drive/My Drive/Bar/Indices'
+
+
+# Step 1: List all CSV files in the folder
+csv_files = [f for f in os.listdir(folder_path) if f.endswith('.csv')]
+
+# Step 2: Function to add 3 hours to the time in a given dataframe
+def increment_hours_by_3(df):
+    # Incrementing time in the <TIME> column
+    df['<TIME>'] = pd.to_datetime(df['<TIME>'], format='%H:%M:%S') + timedelta(hours=3)
+    df['<TIME>'] = df['<TIME>'].dt.time  # Convert back to time format only (no date)
+    return df
+
+# Step 3: Process each CSV file and save with a new name
+for file in csv_files:
+    file_path = os.path.join(folder_path, file)
+    
+    # Check if file exists before trying to read
+    if os.path.exists(file_path):
+        # Read the CSV file into a DataFrame with tab as a delimiter
+        df = pd.read_csv(file_path, delimiter='\t')
+    
+        # Apply the increment to the time column
+        df = increment_hours_by_3(df)
+    
+        # Create a new filename by appending '_updated' to the original filename
+        new_file_name = file.replace('.csv', '_updated.csv')
+        new_file_path = os.path.join(folder_path, new_file_name)
+    
+        # Save the modified DataFrame to a new CSV file with a tab delimiter
+        df.to_csv(new_file_path, sep='\t', index=False)
+    
+        print(f"Saved updated file as: {new_file_name}")
+    else:
+        print(f"File not found: {file_path}")
