@@ -1,0 +1,55 @@
+import os
+import pandas as pd
+from sqlalchemy import create_engine
+
+# Database connection details
+dbname = "api_backend"
+user = "readonly_user"
+password = "password123"
+host = "production-8-sep-night.cqtlpb5sm2vt.ap-northeast-1.rds.amazonaws.com"
+port = 3306
+
+# Create a database connection engine using SQLAlchemy
+db_url = f"mysql+pymysql://{user}:{password}@{host}:{port}/{dbname}"
+engine = create_engine(db_url)
+
+# File paths
+uploaded_csv_file = r"C:\Users\tiyasa\PycharmProjects\Trial_login - Sheet1.csv"  # Path to the uploaded CSV file
+pycharm_projects_folder = os.path.join(os.path.expanduser("~"), "PycharmProjects")
+output_file = os.path.join(pycharm_projects_folder, "Login_with_created_ending.csv")
+
+# Step 1: Load the CSV file
+login_df = pd.read_csv(uploaded_csv_file)
+
+# Step 2: Extract the 'Login' column (assuming the column is named 'Login')
+logins = tuple(map(int, login_df['Login'].unique()))  # Convert the logins to regular Python integers
+
+# If there's only one login, modify the tuple to avoid SQL syntax issues
+if len(logins) == 1:
+    logins = f"({logins[0]})"
+else:
+    logins = str(logins)
+
+# Step 3: SQL query to fetch data from 'trades' and 'accounts' table
+trades_query = f"""
+    SELECT t.login, a.created_at, a.updated_at, a.deleted_at 
+    FROM trades t
+    JOIN accounts a ON t.account_id = a.id
+    WHERE t.login IN {logins};
+"""
+
+# Step 4: Execute the query and fetch the data into a DataFrame
+trades_df = pd.read_sql(trades_query, engine)
+
+# Step 5: Check if any data was fetched
+if trades_df.empty:
+    print("No matching login data found in the trades table.")
+else:
+    print(f"Fetched {len(trades_df)} rows of data.")
+
+    # Step 6: Filter the DataFrame to keep only unique rows where created_at, updated_at, and deleted_at are the same for each login
+    unique_rows_df = trades_df.drop_duplicates(subset=['login', 'created_at', 'updated_at', 'deleted_at'])
+
+    # Step 7: Write the filtered DataFrame to a new CSV file
+    unique_rows_df.to_csv(output_file, index=False)
+    print(f"Filtered results saved to {output_file}")
