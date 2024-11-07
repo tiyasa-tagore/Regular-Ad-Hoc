@@ -1,0 +1,77 @@
+import os
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.utils.dataframe import dataframe_to_rows
+from openpyxl.worksheet.table import Table, TableStyleInfo
+
+# File paths
+uploaded_csv_file = r"C:\Users\tiyasa\PycharmProjects\Login_wise_markup_T4B_data.csv"
+
+# Define the output file path for saving the results in .xlsx format
+pycharm_projects_folder = os.path.join(os.path.expanduser("~"), "PycharmProjects")
+output_file = os.path.join(pycharm_projects_folder, "Table_Overall_Login_wise_markup_T4B_data3.xlsx")
+
+# Read the CSV file
+df = pd.read_csv(uploaded_csv_file)
+
+# Clean the columns to remove 'USD' and convert to numeric
+df['Trader profit'] = df['Trader profit'].str.replace(' USD', '').astype(float)
+df['TP broker profit'] = df['TP broker profit'].str.replace(' USD', '').astype(float)
+
+# Create 'overall data' by summing for each unique 'Login'
+overall_data = df.groupby('Login').agg({
+    'Volume (lots)': 'sum',
+    'Trader profit': 'sum',
+    'TP broker profit': 'sum',
+    'Markup in pips': 'sum'
+}).reset_index()
+
+# Define Lot ranges for the table
+lot_ranges = [(0.01, 0.99), (1, 1.99), (2, 4.99), (5, 9.99), (10, 19.99), (20, float('inf'))]
+lot_range_labels = ["0.01 - 0.99", "1 - 1.99", "2 - 4.99", "5 - 9.99", "10 - 19.99", "20+"]
+
+# Create the table with specified Lot ranges
+table_data = []
+
+for lot_range, label in zip(lot_ranges, lot_range_labels):
+    # Filter rows that fall within the current Lot range
+    filtered_df = df[(df['Volume (lots)'] >= lot_range[0]) & (df['Volume (lots)'] <= lot_range[1])]
+
+    # Calculate Trade Count, Markup Sum, and TP Broker Profit Sum for the current range
+    trade_count = filtered_df.shape[0]
+    markup_sum = filtered_df['Markup in pips'].sum()
+    tp_broker_profit_sum = filtered_df['TP broker profit'].sum()
+
+    # Append results to table data
+    table_data.append([label, trade_count, markup_sum, tp_broker_profit_sum])
+
+# Create a DataFrame for the table
+table_df = pd.DataFrame(table_data, columns=['Lot Range', 'Trade Count', 'Markup Sum', 'TP Broker Profit'])
+
+# Write the DataFrame to an Excel file with the table starting from J1
+with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
+    overall_data.to_excel(writer, sheet_name='Data', index=False)
+    workbook = writer.book
+    worksheet = writer.sheets['Data']
+
+    # Write the table starting from J1
+    for r_idx, row in enumerate(dataframe_to_rows(table_df, index=False, header=True), 1):
+        for c_idx, value in enumerate(row, 10):  # Starting from column J (index 10)
+            worksheet.cell(row=r_idx, column=c_idx, value=value)
+
+    # Create a table with the written data (from J1)
+    min_row = 1
+    max_row = min_row + len(table_df)
+    min_col = 10  # Column J (10th column)
+    max_col = min_col + len(table_df.columns) - 1
+
+    tab = Table(displayName="LotRangeTable", ref=f"J{min_row}:M{max_row}")
+
+    # Add a table style
+    style = TableStyleInfo(name="TableStyleMedium9", showFirstColumn=False,
+                           showLastColumn=False, showRowStripes=True, showColumnStripes=True)
+    tab.tableStyleInfo = style
+    worksheet.add_table(tab)
+
+# File will be saved as an Excel file with the table starting at J1 and properly formatted
+print(f"Data has been saved to {output_file}")
