@@ -1,0 +1,153 @@
+```{r}
+# Load necessary libraries
+library(RMySQL)
+library(tidyverse)
+library(lubridate)
+library(rio)
+library(googlesheets4)
+library(writexl)
+library(zoo)
+library(purrr)
+
+# Set start date and convert to numeric POSIXct format
+start <- "2024-09-12"
+start_date <- as.numeric(as.POSIXct(start, tz = "GMT"))
+
+# Read the b_book_demo_mt5_2 file
+b_book_demo_mt5_2 <- read.csv("deals.csv")
+
+### Database Connection & Tables Connection -------------------
+api_backend <- dbConnect(
+  MySQL(),
+  dbname = "api_backend",
+  user = "readonly_user",
+  password = "password123",
+  host = "production-8-sep-night.cqtlpb5sm2vt.ap-northeast-1.rds.amazonaws.com",
+  port = 3306
+)
+
+# Process the b_book_demo_mt5_2 data
+deals_3 <- b_book_demo_mt5_2 %>%
+  mutate(Trader.profit = as.numeric(str_replace_all(Trader.profit, "USD", ""))) %>%
+  mutate(TP.broker.profit = as.numeric(str_replace_all(TP.broker.profit, "USD", ""))) %>%
+  group_by(Login) %>%
+  summarise(total_trader_profit = sum(Trader.profit),
+            total_tp_broker_profit = sum(TP.broker.profit))
+
+# Calculate the 0 to 1 lot profit for b_book_demo_mt5_2
+zero_to_one_mt5_2 <- b_book_demo_mt5_2 %>%
+  mutate(Trader.profit = as.numeric(str_replace_all(Trader.profit, "USD", ""))) %>%
+  mutate(TP.broker.profit = as.numeric(str_replace_all(TP.broker.profit, "USD", ""))) %>%
+  filter(Volume..lots. > 0 & Volume..lots. < 1) %>%
+  group_by(Login) %>%
+  summarise(zero_to_one_pnl = sum(Trader.profit))
+
+# Join the datasets for mt5_2
+final_mt5_2 <- deals_3 %>%
+  left_join(select(zero_to_one_mt5_2, Login, zero_to_one_pnl)) %>%
+  mutate(zero_to_one_pnl = ifelse(is.na(zero_to_one_pnl), 0, zero_to_one_pnl))
+
+# Accounts and metrics
+accounts_df <- tbl(api_backend, "accounts") %>%
+  filter(login %in% !!final_mt5_2$Login) %>%
+  select(id, login, starting_balance) %>%
+  collect()
+
+account_metrics_df <- tbl(api_backend, "account_metrics") %>%
+  filter(account_id %in% !!accounts_df$id) %>%
+  collect()
+
+# Filter and calculate PnL for account metrics
+account_metrics_df_filtered <- account_metrics_df %>%
+  left_join(select(accounts_df, account_id = id, login, starting_balance)) %>%
+  mutate(metricDate = as.numeric(as.POSIXct(metricDate, tz = "GMT"))) %>%
+  filter(metricDate == start_date) %>%
+  distinct(login, .keep_all = TRUE) %>%
+  mutate(pnl = lastEquity - starting_balance) %>%
+  select(account_id, login, pnl)
+
+# Final join with metrics
+final <- final_mt5_2 %>%
+  left_join(select(account_metrics_df_filtered, Login = login, pnl))
+
+# Summarize profitable traders
+positive_trader <- final %>%
+  filter(pnl > 0) %>%
+  summarise(sum_tp_broker_profit_profitable = sum(total_tp_broker_profit),
+            sum_trader_profit_profitable = sum(total_trader_profit),
+            profitable_trader_count = n(),
+            zero_to_one_pnl_profitable = sum(zero_to_one_pnl)) %>%
+  mutate(profit_saved_percentage_profitable = sum_tp_broker_profit_profitable / sum_trader_profit_profitable)
+
+# Summarize losing traders
+negative_trader <- final %>%
+  filter(pnl < 0) %>%
+  summarise(sum_tp_broker_profit_loser = sum(total_tp_broker_profit),
+            sum_trader_profit_loser = abs(sum(total_trader_profit)),
+            loser_trader_count = n(),
+            zero_to_one_pnl_overall_loser = sum(zero_to_one_pnl)) %>%
+  mutate(profit_saved_percentage_loser = sum_tp_broker_profit_loser / sum_trader_profit_loser)
+
+# For positive traders with positive profits
+positive_trader2 <- final %>%
+  filter(pnl > 0) %>%
+  filter(total_trader_profit > 0) %>%
+  summarise(positive_tp_broker_profit = sum(total_tp_broker_profit),
+            positive_trader_profit = sum(total_trader_profit),
+            positive_trader_count = n(),
+            zero_to_one_pnl_pos = sum(zero_to_one_pnl)) %>%
+  mutate(positive_tp_broker_profit_percentage = positive_tp_broker_profit / positive_trader_profit)
+
+# For negative traders with negative profits
+negative_trader2 <- final %>%
+  filter(pnl > 0) %>%
+  filter(total_trader_profit < 0) %>%
+  summarise(negative_tp_broker_profit = sum(total_tp_broker_profit),
+            negative_trader_profit = abs(sum(total_trader_profit)),
+            negative_trader_count = n(),
+            zero_to_one_pnl_neg = sum(zero_to_one_pnl)) %>%
+  mutate(negative_tp_broker_profit_percentage = negative_tp_broker_profit / negative_trader_profit)
+
+# For positive traders with negative profits
+positive_trader3 <- final %>%
+  filter(pnl < 0) %>%
+  filter(total_trader_profit > 0) %>%
+  summarise(positive_tp_broker_profit_loser = sum(total_tp_broker_profit),
+            positive_trader_profit_loser = sum(total_trader_profit),
+            positive_trader_count_loser = n(),
+            pos_zero_to_one_pnl_loser = sum(zero_to_one_pnl)) %>%
+  mutate(positive_tp_broker_profit_percentage_loser = positive_tp_broker_profit_loser / positive_trader_profit_loser)
+
+# For negative traders with negative profits
+negative_trader3 <- final %>%
+  filter(pnl < 0) %>%
+  filter(total_trader_profit < 0) %>%
+  summarise(negative_tp_broker_profit_loser = sum(total_tp_broker_profit),
+            negative_trader_profit_loser = abs(sum(total_trader_profit)),
+            negative_trader_count_loser = n(),
+            neg_zero_to_one_pnl_loser = sum(zero_to_one_pnl)) %>%
+  mutate(negative_tp_broker_profit_percentage_loser = negative_tp_broker_profit_loser / negative_trader_profit_loser)
+
+# Combine results
+finaldata <- cbind(positive_trader, negative_trader)
+finaldata2 <- cbind(positive_trader2, negative_trader2)
+finaldata3 <- cbind(positive_trader3, negative_trader3)
+
+# Create final output
+output <- cbind(finaldata, finaldata2, finaldata3) %>%
+  select(sum_trader_profit_profitable, sum_tp_broker_profit_profitable, profit_saved_percentage_profitable,
+         profitable_trader_count, zero_to_one_pnl_profitable,
+         positive_trader_profit, positive_tp_broker_profit, positive_tp_broker_profit_percentage, positive_trader_count, zero_to_one_pnl_pos,
+         negative_trader_profit, negative_tp_broker_profit, negative_tp_broker_profit_percentage, negative_trader_count, zero_to_one_pnl_neg,
+         sum_trader_profit_loser, sum_tp_broker_profit_loser, profit_saved_percentage_loser, loser_trader_count, zero_to_one_pnl_overall_loser,
+         positive_trader_profit_loser, positive_tp_broker_profit_loser, positive_tp_broker_profit_percentage_loser, positive_trader_count_loser, pos_zero_to_one_pnl_loser,
+         negative_trader_profit_loser, negative_tp_broker_profit_loser, negative_tp_broker_profit_percentage_loser, negative_trader_count_loser, neg_zero_to_one_pnl_loser)
+
+# Write final output to CSV
+write.csv(output, "b_book_demo_mt5_2_b_book_report.csv")
+
+# Close database connections
+lapply(dbListConnections(MySQL()), dbDisconnect)
+
+
+```
